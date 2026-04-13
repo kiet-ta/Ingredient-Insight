@@ -1,80 +1,261 @@
+-- ============================================
+-- Ingredient Insight - Main Module
+-- Displays recipe icons when hovering inventory items
+-- ============================================
+
 local _G = GLOBAL
 local require = _G.require
 
--- ==========================================
--- 1. LOCAL CACHE (REVERSE INDEXING)
--- ==========================================
-local ReverseIndex = {}
-local CacheText = {}
+local RecipeBoard = require("widgets/recipeboard")
 
--- Hàm chạy 1 lần để scan DB gốc của game
-local function BuildReverseIndex()
-    -- Lặp qua toàn bộ AllRecipes của game
-    for recipe_name, recipe_data in pairs(_G.AllRecipes) do
-        -- Chỉ lấy các công thức craft được (bỏ qua mấy cái tào lao của dev)
-        if recipe_data and recipe_data.ingredients then
-            for _, ingredient in ipairs(recipe_data.ingredients) do
-                local ing_type = ingredient.type
-                
-                -- Khởi tạo mảng nếu chưa có
-                if not ReverseIndex[ing_type] then
-                    ReverseIndex[ing_type] = {}
-                end
-                
-                -- Thêm recipe vào danh sách của ingredient này
-                table.insert(ReverseIndex[ing_type], recipe_name)
-            end
-        end
+local RecipeCache = {}
+local HasBuiltCache = false
+local HOVER_TRANSFER_GRACE = 0.18
+
+Assets = {
+    Asset("ATLAS", "images/inventoryimages.xml"),
+}
+
+local function GetDisplayName(prefab)
+    if not prefab or type(prefab) ~= "string" then
+        return ""
     end
 
-    -- Format sẵn text để tối ưu Memory Garbage
-    for ing_type, recipes in pairs(ReverseIndex) do
-        -- UX Logic: Chỉ hiện tối đa 3 items đầu, phần còn lại gom vào (+N)
-        local display_count = math.min(3, #recipes)
-        local text = "\n🛠️ Craft: "
-        
-        for i = 1, display_count do
-            -- Transform text cho đẹp (ví dụ: rope -> Rope)
-            text = text .. recipes[i] .. (i < display_count and ", " or "")
-        end
-        
-        if #recipes > 3 then
-            text = text .. " (+" .. tostring(#recipes - 3) .. ")"
-        end
-        
-        CacheText[ing_type] = text
+    local upper_name = string.upper(prefab)
+    if _G.STRINGS and _G.STRINGS.NAMES and _G.STRINGS.NAMES[upper_name] then
+        return _G.STRINGS.NAMES[upper_name]
     end
+
+    return prefab
 end
 
--- Gọi hàm build cache ngay khi mod load
-BuildReverseIndex()
+local function IsAltDown()
+    if not _G.TheInput then
+        return false
+    end
 
--- ==========================================
--- 2. CONTEXT VALIDATOR & UI HOOK
--- ==========================================
-local ItemTile = require("widgets/itemtile")
+    return (_G.KEY_ALT and _G.TheInput:IsKeyDown(_G.KEY_ALT))
+        or (_G.KEY_LALT and _G.TheInput:IsKeyDown(_G.KEY_LALT))
+        or (_G.KEY_RALT and _G.TheInput:IsKeyDown(_G.KEY_RALT))
+end
 
--- Hook vào class Hoverer của game
-AddClassPostConstruct("widgets/hoverer", function(self)
-    -- Giữ lại hàm gốc để gọi sau khi mình chèn logic
-    local OldSetString = self.text.SetString
+local function BuildRecipeCache()
+    if HasBuiltCache then return end
+    if not _G.AllRecipes or type(_G.AllRecipes) ~= "table" then return end
     
-    self.text.SetString = function(text_widget, str)
-        -- a. Lấy Entity dưới con trỏ chuột
-        local hovered_entity = _G.TheInput:GetHUDEntityUnderMouse()
-        
-        -- b. Context Validator: Chỉ chạy nếu đang hover vào 1 ô đồ (ItemTile)
-        if hovered_entity and hovered_entity.widget and hovered_entity.widget:IsA(ItemTile) then
-            -- Lấy tên prefab (ID) của cục item đang được hover
-            local item_prefab = hovered_entity.widget.item and hovered_entity.widget.item.prefab
-            
-            -- c. Lấy Text từ Cache (O(1))
-            if item_prefab and CacheText[item_prefab] then
-                str = str .. CacheText[item_prefab]
+    for recipe_name, recipe_data in pairs(_G.AllRecipes) do
+        if type(recipe_data) == "table" then
+            local ingredients = recipe_data.ingredients
+            if type(ingredients) == "table" then
+                for _, ingredient_data in ipairs(ingredients) do
+                    if type(ingredient_data) == "table" and type(ingredient_data.type) == "string" then
+                        local ingredient_type = ingredient_data.type
+                        local product_prefab = recipe_data.product or recipe_name
+                        
+                        if type(product_prefab) == "string" then
+                            if not RecipeCache[ingredient_type] then
+                                RecipeCache[ingredient_type] = {}
+                            end
+                            
+                            local image_tex = recipe_data.image or (product_prefab .. ".tex")
+                            
+                            -- ==================================================
+                            -- FIX LỖI LỦNG LỖ: Lấy đúng Atlas động của Klei Engine
+                            -- ==================================================
+                            local atlas = recipe_data.atlas
+                            if not atlas and _G.GetInventoryItemAtlas then
+                                atlas = _G.GetInventoryItemAtlas(image_tex)
+                            end
+                            -- Fallback phòng hờ
+                            if not atlas then
+                                atlas = "images/inventoryimages.xml"
+                            end
+                            
+                            if atlas and image_tex then
+                                local already_cached = false
+                                for _, cached_recipe in ipairs(RecipeCache[ingredient_type]) do
+                                    if cached_recipe.prefab == product_prefab then
+                                        already_cached = true
+                                        break
+                                    end
+                                end
+                                
+                                if not already_cached then
+                                    table.insert(RecipeCache[ingredient_type], {
+                                        prefab = product_prefab,
+                                        display_name = GetDisplayName(product_prefab),
+                                        atlas = atlas,
+                                        image = image_tex
+                                    })
+                                end
+                            end
+                        end
+                    end
+                end
             end
         end
-        
-        -- Gọi lại hàm gốc với chuỗi str đã được modify
-        OldSetString(text_widget, str)
     end
+    HasBuiltCache = true
+end
+
+local function GetRecipesForIngredient(ingredient_type)
+    if not ingredient_type or type(ingredient_type) ~= "string" then return nil end
+    BuildRecipeCache()
+    return RecipeCache[ingredient_type] or nil
+end
+
+-- ============================================
+-- DIRECT ITEMTILE HOOK & INPUT INTERCEPTION
+-- ============================================
+AddClassPostConstruct("widgets/itemtile", function(self)
+    
+    local old_OnGainFocus = self.OnGainFocus
+    local old_OnLoseFocus = self.OnLoseFocus
+    local old_OnUpdate = self.OnUpdate
+
+    local function IsWidgetOrDescendant(widget, root)
+        while widget do
+            if widget == root then
+                return true
+            end
+            widget = widget.parent
+        end
+        return false
+    end
+
+    local function IsHoveringItemOrBoard(tile)
+        if not _G.TheInput then
+            return false
+        end
+
+        local hud_entity = _G.TheInput:GetHUDEntityUnderMouse()
+        if not (hud_entity and hud_entity.widget) then
+            return false
+        end
+
+        if IsWidgetOrDescendant(hud_entity.widget, tile) then
+            return true
+        end
+
+        if tile.recipe_board and IsWidgetOrDescendant(hud_entity.widget, tile.recipe_board) then
+            return true
+        end
+
+        return false
+    end
+
+    local function EnsureRecipeBoard(tile)
+        if not tile.recipe_board then
+            tile.recipe_board = tile:AddChild(RecipeBoard(tile))
+        end
+        return tile.recipe_board
+    end
+
+    local function HideRecipeBoard(tile, clear)
+        if tile.recipe_board then
+            tile.recipe_board:Hide()
+            if clear then
+                tile.recipe_board:Clear()
+            end
+        end
+    end
+
+    self.OnGainFocus = function(self)
+        if old_OnGainFocus then old_OnGainFocus(self) end
+
+        self._ingredient_insight_focused = true
+        self._ingredient_insight_last_prefab = nil
+        self._ingredient_insight_linger = nil
+        self:StartUpdating()
+
+        if not IsAltDown() then
+            HideRecipeBoard(self, false)
+            return
+        end
+
+        if self.item and self.item.prefab then
+            local recipes = GetRecipesForIngredient(self.item.prefab)
+            
+            if recipes and #recipes > 0 then
+                local board = EnsureRecipeBoard(self)
+                board:SetRecipes(recipes)
+                board:Show()
+                board:MoveToFront()
+                self._ingredient_insight_last_prefab = self.item.prefab
+            else
+                HideRecipeBoard(self, false)
+            end
+        else
+            HideRecipeBoard(self, false)
+        end
+    end
+
+    self.OnLoseFocus = function(self)
+        if old_OnLoseFocus then old_OnLoseFocus(self) end
+
+        self._ingredient_insight_focused = false
+        self._ingredient_insight_last_prefab = nil
+
+        if not IsAltDown() then
+            self:StopUpdating()
+            HideRecipeBoard(self, true)
+            return
+        end
+
+        if not IsHoveringItemOrBoard(self) then
+            -- Keep the board alive briefly so cursor can travel from item -> board.
+            self._ingredient_insight_linger = HOVER_TRANSFER_GRACE
+            self:StartUpdating()
+            return
+        end
+
+        self:StartUpdating()
+    end
+
+    self.OnUpdate = function(self, dt)
+        if old_OnUpdate then
+            old_OnUpdate(self, dt)
+        end
+
+        if not IsAltDown() then
+            HideRecipeBoard(self, true)
+            self:StopUpdating()
+            return
+        end
+
+        if not IsHoveringItemOrBoard(self) then
+            self._ingredient_insight_linger = (self._ingredient_insight_linger or HOVER_TRANSFER_GRACE) - (dt or 0)
+            if self._ingredient_insight_linger <= 0 then
+                HideRecipeBoard(self, true)
+                self:StopUpdating()
+            end
+            return
+        end
+
+        self._ingredient_insight_linger = nil
+
+        if not (self.item and self.item.prefab) then
+            return
+        end
+
+        local recipes = GetRecipesForIngredient(self.item.prefab)
+        if not recipes or #recipes == 0 then
+            HideRecipeBoard(self, true)
+            self:StopUpdating()
+            return
+        end
+
+        local board = EnsureRecipeBoard(self)
+        if self._ingredient_insight_last_prefab ~= self.item.prefab then
+            board:SetRecipes(recipes)
+            self._ingredient_insight_last_prefab = self.item.prefab
+        end
+
+        board:Show()
+        board:MoveToFront()
+    end
+end)
+
+AddGamePostInit(function()
+    BuildRecipeCache()
 end)
