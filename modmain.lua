@@ -11,6 +11,17 @@ local RecipeBoard = require("widgets/recipeboard")
 local RecipeCache = {}
 local HasBuiltCache = false
 local HOVER_TRANSFER_GRACE = 0.18
+local ActiveRecipeBoard = nil
+
+local function IsWidgetOrDescendant(widget, root)
+    while widget do
+        if widget == root then
+            return true
+        end
+        widget = widget.parent
+    end
+    return false
+end
 
 Assets = {
     Asset("ATLAS", "images/inventoryimages.xml"),
@@ -37,6 +48,46 @@ local function IsAltDown()
     return (_G.KEY_ALT and _G.TheInput:IsKeyDown(_G.KEY_ALT))
         or (_G.KEY_LALT and _G.TheInput:IsKeyDown(_G.KEY_LALT))
         or (_G.KEY_RALT and _G.TheInput:IsKeyDown(_G.KEY_RALT))
+end
+
+local function IsPrimaryClickControl(control)
+    return control == _G.CONTROL_PRIMARY
+        or (_G.CONTROL_ACCEPT and control == _G.CONTROL_ACCEPT)
+        or (_G.CONTROL_ACTION and control == _G.CONTROL_ACTION)
+end
+
+local function TryHandleBoardPaging(board, hovered_widget, control, down)
+    if not (board and board.shown and IsPrimaryClickControl(control)) then
+        return false
+    end
+
+    if down then
+        board._ii_click_processed = false
+        return hovered_widget and IsWidgetOrDescendant(hovered_widget, board) or false
+    end
+
+    if board._ii_click_processed then
+        return true
+    end
+
+    if hovered_widget and board.prev_button and IsWidgetOrDescendant(hovered_widget, board.prev_button) then
+        board._ii_click_processed = true
+        board:PrevPage()
+        return true
+    end
+
+    if hovered_widget and board.next_button and IsWidgetOrDescendant(hovered_widget, board.next_button) then
+        board._ii_click_processed = true
+        board:NextPage()
+        return true
+    end
+
+    if hovered_widget and IsWidgetOrDescendant(hovered_widget, board) then
+        board._ii_click_processed = true
+        return true
+    end
+
+    return false
 end
 
 local function BuildRecipeCache()
@@ -112,16 +163,7 @@ AddClassPostConstruct("widgets/itemtile", function(self)
     local old_OnGainFocus = self.OnGainFocus
     local old_OnLoseFocus = self.OnLoseFocus
     local old_OnUpdate = self.OnUpdate
-
-    local function IsWidgetOrDescendant(widget, root)
-        while widget do
-            if widget == root then
-                return true
-            end
-            widget = widget.parent
-        end
-        return false
-    end
+    local old_OnControl = self.OnControl
 
     local function IsHoveringItemOrBoard(tile)
         if not _G.TheInput then
@@ -148,6 +190,7 @@ AddClassPostConstruct("widgets/itemtile", function(self)
         if not tile.recipe_board then
             tile.recipe_board = tile:AddChild(RecipeBoard(tile))
         end
+        ActiveRecipeBoard = tile.recipe_board
         return tile.recipe_board
     end
 
@@ -156,6 +199,9 @@ AddClassPostConstruct("widgets/itemtile", function(self)
             tile.recipe_board:Hide()
             if clear then
                 tile.recipe_board:Clear()
+            end
+            if ActiveRecipeBoard == tile.recipe_board then
+                ActiveRecipeBoard = nil
             end
         end
     end
@@ -253,6 +299,45 @@ AddClassPostConstruct("widgets/itemtile", function(self)
 
         board:Show()
         board:MoveToFront()
+    end
+
+    self.OnControl = function(self, control, down)
+        if IsAltDown() and self.recipe_board and self.recipe_board.shown and IsPrimaryClickControl(control) then
+            local hud_entity = _G.TheInput and _G.TheInput:GetHUDEntityUnderMouse() or nil
+            local hovered_widget = hud_entity and hud_entity.widget or nil
+
+            if TryHandleBoardPaging(self.recipe_board, hovered_widget, control, down) then
+                return true
+            end
+
+            return true
+        end
+
+        if old_OnControl then
+            return old_OnControl(self, control, down)
+        end
+    end
+end)
+
+AddClassPostConstruct("widgets/hoverer", function(self)
+    local old_OnControl = self.OnControl
+
+    self.OnControl = function(self, control, down)
+        local board = ActiveRecipeBoard
+        if board and board.shown and IsAltDown() and IsPrimaryClickControl(control) then
+            local hud_entity = _G.TheInput and _G.TheInput:GetHUDEntityUnderMouse() or nil
+            local hovered_widget = hud_entity and hud_entity.widget or nil
+
+            if TryHandleBoardPaging(board, hovered_widget, control, down) then
+                return true
+            end
+
+            return true
+        end
+
+        if old_OnControl then
+            return old_OnControl(self, control, down)
+        end
     end
 end)
 

@@ -15,7 +15,7 @@ local PADDING = 10
 local BG_PADDING = 20
 local TITLE_SPACE = 32
 local FOOTER_SPACE = 28
-local NAV_SCALE = 0.75
+local NAV_SCALE = 0.62
 local NAV_HITBOX_SCALE = 1.15
 
 local DEBUG_LOG = true
@@ -46,11 +46,6 @@ local function CreateSafeImageButton(parent, atlas, tex)
 end
 
 local function CreateSafeNavButton(parent)
-    local button = CreateSafeImageButton(parent, "images/ui.xml", "blank.tex")
-    if button then
-        return button
-    end
-
     return CreateSafeImageButton(parent, "images/ui.xml", "scroll_arrow.tex")
 end
 
@@ -76,11 +71,22 @@ local function CreateSafeBackground(parent)
     return parent:AddChild(Image(DEFAULT_BG_ATLAS, DEFAULT_BG_TEX))
 end
 
+local function IsWidgetOrDescendant(widget, root)
+    while widget do
+        if widget == root then
+            return true
+        end
+        widget = widget.parent
+    end
+    return false
+end
+
 local RecipeBoard = Class(Widget, function(self, owner)
     Widget._ctor(self, "RecipeBoard")
     self.owner = owner
     self.recipe_items = {}
     self.nav_buttons = {}
+    self:SetClickable(true)
 
     self.full_recipe_list = {}
     self.current_page = 1
@@ -94,8 +100,8 @@ local RecipeBoard = Class(Widget, function(self, owner)
     self.icon_container = self:AddChild(Widget("icon_container"))
     self.icon_container:MoveToFront()
 
-    self.selected_text = self:AddChild(Text(UIFONT, 28, ""))
-    self.selected_text:SetSize(36)
+    self.selected_text = self:AddChild(Text(UIFONT, 40, ""))
+    self.selected_text:SetSize(52)
     self.selected_text:SetColour(0.95, 0.95, 0.95, 1)
     self.selected_text:Hide()
 
@@ -106,7 +112,9 @@ local RecipeBoard = Class(Widget, function(self, owner)
 
     local prev_button = CreateSafeNavButton(self)
     if prev_button then
-        prev_button:SetScale(NAV_HITBOX_SCALE)
+        prev_button:SetScale(NAV_SCALE)
+        if prev_button.SetClickable then prev_button:SetClickable(true) end
+        prev_button.page_action = "prev"
         prev_button:SetOnClick(function()
             Dbg("Prev button clicked")
             self:PrevPage()
@@ -118,7 +126,9 @@ local RecipeBoard = Class(Widget, function(self, owner)
 
     local next_button = CreateSafeNavButton(self)
     if next_button then
-        next_button:SetScale(NAV_HITBOX_SCALE)
+        next_button:SetScale(NAV_SCALE)
+        if next_button.SetClickable then next_button:SetClickable(true) end
+        next_button.page_action = "next"
         next_button:SetOnClick(function()
             Dbg("Next button clicked")
             self:NextPage()
@@ -126,18 +136,6 @@ local RecipeBoard = Class(Widget, function(self, owner)
         next_button:Hide()
         self.next_button = next_button
         table.insert(self.nav_buttons, next_button)
-    end
-
-    self.prev_arrow = CreateSafeImage(self, "images/ui.xml", "scroll_arrow.tex")
-    if self.prev_arrow then
-        self.prev_arrow:SetScale(-NAV_SCALE, NAV_SCALE)
-        self.prev_arrow:Hide()
-    end
-
-    self.next_arrow = CreateSafeImage(self, "images/ui.xml", "scroll_arrow.tex")
-    if self.next_arrow then
-        self.next_arrow:SetScale(NAV_SCALE)
-        self.next_arrow:Hide()
     end
 
     self:Hide()
@@ -211,6 +209,7 @@ function RecipeBoard:ShowPage(page_num)
             local icon_widget = CreateSafeImageButton(self.icon_container, recipe_data.atlas, recipe_data.image)
             if icon_widget then
                 icon_widget:SetScale(ICON_SIZE / 64)
+                icon_widget.recipe_data = recipe_data
                 icon_widget:SetOnClick(function()
                     self:SetHoveredRecipe(recipe_data)
                 end)
@@ -240,27 +239,15 @@ function RecipeBoard:ShowPage(page_num)
         self.page_text:Show()
 
         if self.prev_button then
-            self.prev_button:SetPosition(-(width / 2) + 28, -(height / 2) + 20, 0)
+            self.prev_button:SetPosition(-(width / 2) + 20, -(height / 2) + 20, 0)
             self.prev_button:Show()
             self.prev_button:MoveToFront()
         end
 
         if self.next_button then
-            self.next_button:SetPosition((width / 2) - 28, -(height / 2) + 20, 0)
+            self.next_button:SetPosition((width / 2) - 20, -(height / 2) + 20, 0)
             self.next_button:Show()
             self.next_button:MoveToFront()
-        end
-
-        if self.prev_arrow then
-            self.prev_arrow:SetPosition(-(width / 2) + 28, -(height / 2) + 20, 0)
-            self.prev_arrow:Show()
-            self.prev_arrow:MoveToFront()
-        end
-
-        if self.next_arrow then
-            self.next_arrow:SetPosition((width / 2) - 28, -(height / 2) + 20, 0)
-            self.next_arrow:Show()
-            self.next_arrow:MoveToFront()
         end
 
         self.page_text:MoveToFront()
@@ -268,8 +255,6 @@ function RecipeBoard:ShowPage(page_num)
         self.page_text:Hide()
         if self.prev_button then self.prev_button:Hide() end
         if self.next_button then self.next_button:Hide() end
-        if self.prev_arrow then self.prev_arrow:Hide() end
-        if self.next_arrow then self.next_arrow:Hide() end
     end
 end
 
