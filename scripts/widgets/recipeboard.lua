@@ -2,6 +2,8 @@
 -- RecipeBoard Widget (Dai tu UX/UI)
 -- ============================================
 
+local _G = GLOBAL
+
 local Image = require "widgets/image"
 local ImageButton = require "widgets/imagebutton"
 local Widget = require "widgets/widget"
@@ -17,6 +19,9 @@ local TITLE_SPACE = 32
 local FOOTER_SPACE = 28
 local NAV_SCALE = 0.62
 local NAV_HITBOX_SCALE = 1.15
+local NAV_TEXTURE_SIZE = 64
+local NAV_HITBOX_SIZE = NAV_TEXTURE_SIZE * NAV_HITBOX_SCALE
+local DUPLICATE_CLICK_WINDOW = 0.05
 
 local DEBUG_LOG = true
 
@@ -47,6 +52,10 @@ end
 
 local function CreateSafeNavButton(parent)
     return CreateSafeImageButton(parent, "images/ui.xml", "scroll_arrow.tex")
+end
+
+local function CreateSafeNavHitbox(parent)
+    return CreateSafeImageButton(parent, "images/ui.xml", "blank.tex")
 end
 
 local function CreateSafeImage(parent, atlas, tex)
@@ -81,17 +90,79 @@ local function IsWidgetOrDescendant(widget, root)
     return false
 end
 
+local function GetTimeSeconds()
+    return _G.GetTime and _G.GetTime() or 0
+end
+
+local function ConfigureNavSurface(surface, owner, action, source_name)
+    if not surface then
+        return
+    end
+
+    surface.page_action = action
+
+    if surface.SetControl then
+        surface:SetControl(_G.CONTROL_PRIMARY)
+    end
+
+    if surface.SetClickable then
+        surface:SetClickable(true)
+    end
+
+    surface:SetOnDown(function()
+        owner:HandlePageAction(action, true, source_name .. "_down")
+    end)
+
+    surface:SetOnClick(function()
+        owner:HandlePageAction(action, false, source_name .. "_click")
+    end)
+end
+
+local function ConfigureNavHitbox(hitbox, visual_button)
+    if not hitbox then
+        return
+    end
+
+    hitbox:ForceImageSize(NAV_HITBOX_SIZE, NAV_HITBOX_SIZE)
+    hitbox.scale_on_focus = false
+    hitbox.move_on_click = false
+    hitbox.stopclicksound = true
+
+    if hitbox.SetImageNormalColour then
+        hitbox:SetImageNormalColour(1, 1, 1, 0)
+        hitbox:SetImageFocusColour(1, 1, 1, 0)
+        hitbox:SetImageDisabledColour(1, 1, 1, 0)
+        hitbox:SetImageSelectedColour(1, 1, 1, 0)
+    end
+
+    hitbox.OnGainFocus = function()
+        if visual_button and visual_button.OnGainFocus then
+            visual_button:OnGainFocus()
+        end
+    end
+
+    hitbox.OnLoseFocus = function()
+        if visual_button and visual_button.OnLoseFocus then
+            visual_button:OnLoseFocus()
+        end
+    end
+end
+
 local RecipeBoard = Class(Widget, function(self, owner)
     Widget._ctor(self, "RecipeBoard")
     self.owner = owner
     self.recipe_items = {}
     self.nav_buttons = {}
+    self.nav_hitboxes = {}
     self:SetClickable(true)
 
     self.full_recipe_list = {}
     self.current_page = 1
     self.total_pages = 1
     self.selected_recipe_name = ""
+    self._ii_nav_pressed_action = nil
+    self._ii_last_handled_action = nil
+    self._ii_last_handled_time = -math.huge
 
     self.bg = self:AddChild(Widget("background"))
     self.bg_image = CreateSafeBackground(self.bg)
@@ -113,29 +184,37 @@ local RecipeBoard = Class(Widget, function(self, owner)
     local prev_button = CreateSafeNavButton(self)
     if prev_button then
         prev_button:SetScale(NAV_SCALE)
-        if prev_button.SetClickable then prev_button:SetClickable(true) end
-        prev_button.page_action = "prev"
-        prev_button:SetOnClick(function()
-            Dbg("Prev button clicked")
-            self:PrevPage()
-        end)
+        ConfigureNavSurface(prev_button, self, "prev", "prev_button")
         prev_button:Hide()
         self.prev_button = prev_button
         table.insert(self.nav_buttons, prev_button)
     end
 
+    local prev_hitbox = CreateSafeNavHitbox(self)
+    if prev_hitbox then
+        ConfigureNavHitbox(prev_hitbox, prev_button)
+        ConfigureNavSurface(prev_hitbox, self, "prev", "prev_hitbox")
+        prev_hitbox:Hide()
+        self.prev_hitbox = prev_hitbox
+        table.insert(self.nav_hitboxes, prev_hitbox)
+    end
+
     local next_button = CreateSafeNavButton(self)
     if next_button then
         next_button:SetScale(NAV_SCALE)
-        if next_button.SetClickable then next_button:SetClickable(true) end
-        next_button.page_action = "next"
-        next_button:SetOnClick(function()
-            Dbg("Next button clicked")
-            self:NextPage()
-        end)
+        ConfigureNavSurface(next_button, self, "next", "next_button")
         next_button:Hide()
         self.next_button = next_button
         table.insert(self.nav_buttons, next_button)
+    end
+
+    local next_hitbox = CreateSafeNavHitbox(self)
+    if next_hitbox then
+        ConfigureNavHitbox(next_hitbox, next_button)
+        ConfigureNavSurface(next_hitbox, self, "next", "next_hitbox")
+        next_hitbox:Hide()
+        self.next_hitbox = next_hitbox
+        table.insert(self.nav_hitboxes, next_hitbox)
     end
 
     self:Hide()
@@ -167,6 +246,7 @@ function RecipeBoard:SetRecipes(recipe_list)
         return
     end
 
+    self._ii_nav_pressed_action = nil
     self.full_recipe_list = recipe_list
     self.total_pages = math.ceil(#recipe_list / ITEMS_PER_PAGE)
     self.current_page = 1
@@ -241,10 +321,22 @@ function RecipeBoard:ShowPage(page_num)
             self.prev_button:MoveToFront()
         end
 
+        if self.prev_hitbox then
+            self.prev_hitbox:SetPosition(-(width / 2) + 20, -(height / 2) + 20, 0)
+            self.prev_hitbox:Show()
+            self.prev_hitbox:MoveToFront()
+        end
+
         if self.next_button then
             self.next_button:SetPosition((width / 2) - 20, -(height / 2) + 20, 0)
             self.next_button:Show()
             self.next_button:MoveToFront()
+        end
+
+        if self.next_hitbox then
+            self.next_hitbox:SetPosition((width / 2) - 20, -(height / 2) + 20, 0)
+            self.next_hitbox:Show()
+            self.next_hitbox:MoveToFront()
         end
 
         self.page_text:MoveToFront()
@@ -252,6 +344,8 @@ function RecipeBoard:ShowPage(page_num)
         self.page_text:Hide()
         if self.prev_button then self.prev_button:Hide() end
         if self.next_button then self.next_button:Hide() end
+        if self.prev_hitbox then self.prev_hitbox:Hide() end
+        if self.next_hitbox then self.next_hitbox:Hide() end
     end
 end
 
@@ -281,23 +375,116 @@ function RecipeBoard:Clear()
     self.recipe_items = {}
 end
 
+function RecipeBoard:GetHoveredPageAction()
+    local hud_entity = _G.TheInput and _G.TheInput:GetHUDEntityUnderMouse() or nil
+    local hovered_widget = hud_entity and hud_entity.widget or nil
+    if not hovered_widget then
+        return nil
+    end
+
+    if self.prev_hitbox and IsWidgetOrDescendant(hovered_widget, self.prev_hitbox) then
+        return "prev"
+    end
+
+    if self.next_hitbox and IsWidgetOrDescendant(hovered_widget, self.next_hitbox) then
+        return "next"
+    end
+
+    if self.prev_button and IsWidgetOrDescendant(hovered_widget, self.prev_button) then
+        return "prev"
+    end
+
+    if self.next_button and IsWidgetOrDescendant(hovered_widget, self.next_button) then
+        return "next"
+    end
+
+    return nil
+end
+
+function RecipeBoard:HandlePageAction(action, down, source_name)
+    if self.total_pages <= 1 then
+        if not down then
+            self._ii_nav_pressed_action = nil
+        end
+        return false
+    end
+
+    if down then
+        if not action then
+            self._ii_nav_pressed_action = nil
+            return false
+        end
+
+        self._ii_nav_pressed_action = action
+        return true
+    end
+
+    if not action then
+        if self._ii_nav_pressed_action ~= nil then
+            Dbg("Page release consumed without turn (" .. tostring(source_name) .. ")")
+            self._ii_nav_pressed_action = nil
+            return true
+        end
+        return false
+    end
+
+    local now = GetTimeSeconds()
+    if self._ii_last_handled_action == action and (now - self._ii_last_handled_time) <= DUPLICATE_CLICK_WINDOW then
+        return true
+    end
+
+    local pending_action = self._ii_nav_pressed_action
+    self._ii_nav_pressed_action = nil
+
+    if pending_action ~= nil and pending_action ~= action then
+        Dbg("Page release mismatch " .. tostring(pending_action) .. " -> " .. tostring(action) .. " (" .. tostring(source_name) .. ")")
+        return true
+    end
+
+    self._ii_last_handled_action = action
+    self._ii_last_handled_time = now
+
+    if action == "prev" then
+        Dbg("Prev button clicked (" .. tostring(source_name) .. ")")
+        self:PrevPage()
+        return true
+    end
+
+    if action == "next" then
+        Dbg("Next button clicked (" .. tostring(source_name) .. ")")
+        self:NextPage()
+        return true
+    end
+
+    return false
+end
+
 function RecipeBoard:OnMouseButton(button, down, x, y)
     if not self.shown then
         return false
     end
 
-    local hud_entity = TheInput and TheInput:GetHUDEntityUnderMouse() or nil
-    local hovered_widget = hud_entity and hud_entity.widget or nil
+    if button ~= _G.MOUSEBUTTON_LEFT then
+        return false
+    end
 
-    if hovered_widget and self.prev_button and IsWidgetOrDescendant(hovered_widget, self.prev_button) then
+    return self:HandlePageAction(self:GetHoveredPageAction(), down, "board_mouse")
+end
+
+function RecipeBoard:OnControl(control, down)
+    if RecipeBoard._base.OnControl(self, control, down) then
         return true
     end
 
-    if hovered_widget and self.next_button and IsWidgetOrDescendant(hovered_widget, self.next_button) then
-        return true
+    if not self.shown then
+        return false
     end
 
-    return false
+    if control ~= _G.CONTROL_ACCEPT or not (_G.TheFrontEnd and _G.TheFrontEnd.isprimary) then
+        return false
+    end
+
+    return self:HandlePageAction(self:GetHoveredPageAction(), down, "board_control")
 end
 
 function RecipeBoard:OnDestroy()
