@@ -2,7 +2,7 @@
 -- RecipeBoard Widget (Dai tu UX/UI)
 -- ============================================
 
-local _G = GLOBAL
+local _G = _G
 
 local Image = require "widgets/image"
 local ImageButton = require "widgets/imagebutton"

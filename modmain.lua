@@ -112,6 +112,22 @@ AddClassPostConstruct("widgets/itemtile", function(self)
     local old_OnGainFocus = self.OnGainFocus
     local old_OnLoseFocus = self.OnLoseFocus
     local old_OnUpdate = self.OnUpdate
+    local old_OnControl = self.OnControl
+    local old_OnMouseButton = self.OnMouseButton
+
+    local function TryHandleBoardPageAction(tile, down, source_name)
+        local board = tile and tile.recipe_board or nil
+        if not (board and board.shown and board.GetHoveredPageAction and board.HandlePageAction) then
+            return false
+        end
+
+        local action = board:GetHoveredPageAction()
+        if not action then
+            return false
+        end
+
+        return board:HandlePageAction(action, down, source_name) == true
+    end
 
     local function IsHoveringItemOrBoard(tile)
         if not _G.TheInput then
@@ -224,6 +240,30 @@ AddClassPostConstruct("widgets/itemtile", function(self)
 
         board:Show()
         board:MoveToFront()
+    end
+
+    self.OnControl = function(self, control, down)
+        if control == _G.CONTROL_ACCEPT and TryHandleBoardPageAction(self, down, "itemtile_control") then
+            return true
+        end
+
+        if old_OnControl then
+            return old_OnControl(self, control, down)
+        end
+
+        return false
+    end
+
+    self.OnMouseButton = function(self, button, down, x, y)
+        if button == _G.MOUSEBUTTON_LEFT and TryHandleBoardPageAction(self, down, "itemtile_mouse") then
+            return true
+        end
+
+        if old_OnMouseButton then
+            return old_OnMouseButton(self, button, down, x, y)
+        end
+
+        return false
     end
 end)
 
